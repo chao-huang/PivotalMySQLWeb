@@ -18,13 +18,12 @@ limitations under the License.
 package com.pivotal.pcf.mysqlweb.utils;
 
 import java.sql.Connection;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Properties;
+import java.util.*;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pivotal.pcf.mysqlweb.beans.Login;
+import com.pivotal.pcf.mysqlweb.beans.MySQLInstance;
+import lombok.extern.slf4j.Slf4j;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.boot.json.JsonParser;
@@ -33,10 +32,10 @@ import org.springframework.boot.json.JsonParserFactory;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
+@Slf4j
 public class Utils
 {
-    protected static Logger logger = LoggerFactory.getLogger(Utils.class);
-
+    
     public static String getVcapServices ()
     {
         String jsonString = null;
@@ -111,14 +110,14 @@ public class Utils
             {
                 if (conn.isClosed() || ! conn.isValid(5))
                 {
-                    logger.info("Connection = null OR Connection no longer valid");
+                    log.info("Connection = null OR Connection no longer valid");
                     // Need logic to reconnect here if VCAP_SERVICES is populated and running in CF
                     ConnectionManager cm = ConnectionManager.getInstance();
 
                     String jsonString = System.getenv().get("VCAP_SERVICES");
                     if (jsonString != null) {
                         if (jsonString.length() > 0) {
-                            logger.info("** Attempting login using VCAP_SERVICES **");
+                            log.info("** Attempting login using VCAP_SERVICES **");
 
                             Login login = Utils.parseLoginCredentials(jsonString);
                             cm.removeDataSource((String) session.getAttribute("user_key"));
@@ -156,53 +155,156 @@ public class Utils
         Map<String, Object> jsonMap = parser.parseMap(jsonString);
 
         // Check for clearDB first
-        List mysqlService = (List) jsonMap.get("cleardb");
+        List mysqlService   = (List) jsonMap.get("cleardb");
+        Map cfMySQLMap      = null;
+        Map credentailsMap  = null;
 
         if (mysqlService == null)
         {
             // just check if it's "p-mysql" v1 instance
             mysqlService = (List) jsonMap.get("p-mysql");
-            if (mysqlService != null)
-            {
-                logger.info("Obtaining VCAP_SERVICES credentials - p-mysql");
-                Map clearDBMap = (Map) mysqlService.get(0);
-                Map credentailsMap = (Map) clearDBMap.get("credentials");
-
+            if (mysqlService != null) {
+                log.info("Obtaining VCAP_SERVICES credentials - p-mysql");
+                cfMySQLMap = (Map) mysqlService.get(0);
+                credentailsMap = (Map) cfMySQLMap.get("credentials");
                 login.setUrl((String) credentailsMap.get("jdbcUrl") + "&connectTimeout=1800000&socketTimeout=1800000&autoReconnect=true&reconnect=true");
-                login.setUsername((String) credentailsMap.get("username"));
-                login.setPassword((String) credentailsMap.get("password"));
-                login.setSchema((String) credentailsMap.get("name"));
-
-            } else {
+            }
+            else {
                 // just check if it's "p.mysql" v2 instance
                 mysqlService = (List) jsonMap.get("p.mysql");
                 if (mysqlService != null) {
-                    logger.info("Obtaining VCAP_SERVICES credentials - p.mysql");
-                    Map clearDBMap = (Map) mysqlService.get(0);
-                    Map credentailsMap = (Map) clearDBMap.get("credentials");
-
-                    login.setUrl((String) credentailsMap.get("jdbcUrl") + "&connectTimeout=1800000&socketTimeout=1800000&autoReconnect=true&reconnect=true");
-                    login.setUsername((String) credentailsMap.get("username"));
-                    login.setPassword((String) credentailsMap.get("password"));
-                    login.setSchema((String) credentailsMap.get("name"));
-                } else {
+                    log.info("Obtaining VCAP_SERVICES credentials - p.mysql");
+                    cfMySQLMap = (Map) mysqlService.get(0);
+                    credentailsMap = (Map) cfMySQLMap.get("credentials");
+                    login.setUrl((String) credentailsMap.get("jdbcUrl"));
+                }
+                else {
                     // just check if it's "google-cloudsql-mysql" GCP instance
                     mysqlService = (List) jsonMap.get("google-cloudsql-mysql");
                     if (mysqlService != null) {
-                        logger.info("Obtaining VCAP_SERVICES credentials - google-cloudsql-mysql ******");
-                        Map clearDBMap = (Map) mysqlService.get(0);
-                        Map credentailsMap = (Map) clearDBMap.get("credentials");
+                        log.info("Obtaining VCAP_SERVICES credentials - google-cloudsql-mysql");
+                        cfMySQLMap = (Map) mysqlService.get(0);
+                        credentailsMap = (Map) cfMySQLMap.get("credentials");
 
                         login.setUrl("jdbc:mysql://" + (String) credentailsMap.get("host") + ":3306/" + (String) credentailsMap.get("database_name"));
                         login.setUsername((String) credentailsMap.get("Username"));
                         login.setPassword((String) credentailsMap.get("Password"));
                         login.setSchema((String) credentailsMap.get("database_name"));
+
+                        return login;
+                    }
+
+                    // just check if it's "mariadbent" instance
+                    mysqlService = (List) jsonMap.get("mariadbent");
+                    if (mysqlService != null) {
+                        cfMySQLMap = (Map) mysqlService.get(0);
+                        credentailsMap = (Map) cfMySQLMap.get("credentials");
+                        login.setUrl((String) credentailsMap.get("jdbcUrl") + "&connectTimeout=1800000&socketTimeout=1800000&autoReconnect=true&reconnect=true");
+                    }
+
+                    // just check if it's "aws_aurora" instance
+                    mysqlService = (List) jsonMap.get("aws_aurora");
+                    if (mysqlService != null) {
+                        cfMySQLMap = (Map) mysqlService.get(0);
+                        credentailsMap = (Map) cfMySQLMap.get("credentials");
+                        login.setUrl((String) credentailsMap.get("jdbcUrl") + "&connectTimeout=1800000&socketTimeout=1800000&autoReconnect=true&reconnect=true");
                     }
                 }
             }
         }
+        else
+        {
+            log.info("Obtaining VCAP_SERVICES credentials - cleardb");
+            cfMySQLMap = (Map) mysqlService.get(0);
+            credentailsMap = (Map) cfMySQLMap.get("credentials");
+            login.setUrl((String) credentailsMap.get("jdbcUrl") + "&connectTimeout=1800000&socketTimeout=1800000&autoReconnect=true&reconnect=true");
+        }
+
+        // for p.mysql, p-mysql, cleardb, mariadbent and aws_aurora these properties are identical
+        login.setUsername((String) credentailsMap.get("username"));
+        login.setPassword((String) credentailsMap.get("password"));
+        login.setSchema((String) credentailsMap.get("name"));
 
         return login;
+    }
+
+    public static List<MySQLInstance> getAllServices (String jsonString) {
+        List<MySQLInstance> services = new ArrayList<MySQLInstance>();
+
+        JsonParser parser = JsonParserFactory.getJsonParser();
+
+        Map<String, Object> jsonMap = parser.parseMap(jsonString);
+        List mysqlServices = null;
+        Map cfMySQLMap     = null;
+
+        // cleardb first
+        mysqlServices = (List) jsonMap.get("cleardb");
+        if (mysqlServices != null) {
+            log.info("cleardb services size = " + mysqlServices.size());
+            for (Object entry : mysqlServices) {
+                cfMySQLMap = (Map) entry;
+                services.add(new MySQLInstance("cleardb", (String) cfMySQLMap.get("name")));
+            }
+        }
+
+        // p.mysql next
+        mysqlServices = null;
+        cfMySQLMap     = null;
+        mysqlServices = (List) jsonMap.get("p.mysql");
+        if (mysqlServices != null) {
+            log.info("p.mysql services size = " + mysqlServices.size());
+            for (Object entry : mysqlServices) {
+                cfMySQLMap = (Map) entry;
+                services.add(new MySQLInstance("p.mysql", (String) cfMySQLMap.get("name")));
+            }
+        }
+
+        // p-mysql next
+        mysqlServices = null;
+        cfMySQLMap     = null;
+        mysqlServices = (List) jsonMap.get("p-mysql");
+        if (mysqlServices != null) {
+            log.info("p-mysql services size = " + mysqlServices.size());
+            for (Object entry : mysqlServices) {
+                cfMySQLMap = (Map) entry;
+                services.add(new MySQLInstance("p-mysql", (String) cfMySQLMap.get("name")));
+            }
+        }
+
+        // google-cloudsql-mysql next
+        mysqlServices = (List) jsonMap.get("google-cloudsql-mysql");
+        if (mysqlServices != null) {
+            log.info("google-cloudsql-mysql services size = " + mysqlServices.size());
+            for (Object entry : mysqlServices) {
+                cfMySQLMap = (Map) entry;
+                services.add(new MySQLInstance("google-cloudsql-mysql", (String) cfMySQLMap.get("name")));
+            }
+        }
+
+        // mariadbent next
+        mysqlServices = (List) jsonMap.get("mariadbent");
+        if (mysqlServices != null) {
+            log.info("mariadbent size = " + mysqlServices.size());
+            for (Object entry : mysqlServices) {
+                cfMySQLMap = (Map) entry;
+                services.add(new MySQLInstance("mariadbent", (String) cfMySQLMap.get("name")));
+            }
+        }
+
+        // aws_aurora next
+        mysqlServices = (List) jsonMap.get("aws_aurora");
+        if (mysqlServices != null) {
+            log.info("aws_aurora size = " + mysqlServices.size());
+            for (Object entry : mysqlServices) {
+                cfMySQLMap = (Map) entry;
+                services.add(new MySQLInstance("aws_aurora", (String) cfMySQLMap.get("name")));
+            }
+        }
+
+        log.info("Found " + services.size() + " service(s) in vcap_services");
+        log.info("Services: " + Arrays.toString(services.toArray()));
+
+        return services;
     }
 
     static public Map<String, Long> getSchemaMap ()

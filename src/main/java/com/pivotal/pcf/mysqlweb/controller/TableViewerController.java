@@ -17,29 +17,28 @@ limitations under the License.
  */
 package com.pivotal.pcf.mysqlweb.controller;
 
+import com.pivotal.pcf.mysqlweb.beans.UserPref;
 import com.pivotal.pcf.mysqlweb.beans.WebResult;
 import com.pivotal.pcf.mysqlweb.dao.PivotalMySQLWebDAOFactory;
 import com.pivotal.pcf.mysqlweb.dao.generic.GenericDAO;
 import com.pivotal.pcf.mysqlweb.dao.tables.Constants;
 import com.pivotal.pcf.mysqlweb.dao.tables.TableDAO;
 import com.pivotal.pcf.mysqlweb.utils.Utils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
-
 
 import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
+@Slf4j
 @Controller
 public class TableViewerController
 {
-    protected static Logger logger = LoggerFactory.getLogger(TableViewerController.class);
 
-    private String tableRows = "select * from %s.%s limit 30";
+    private String tableRows = "select * from %s.%s limit %s";
 
     @GetMapping(value = "/tableviewer")
     public String showTables
@@ -47,11 +46,13 @@ public class TableViewerController
     {
         if (Utils.verifyConnection(response, session))
         {
-            logger.info("user_key is null OR Connection stale so new Login required");
+            log.info("user_key is null OR Connection stale so new Login required");
             return null;
         }
 
-        logger.info("Received request to show table viewer page");
+        log.info("Received request to show table viewer page");
+
+        UserPref userPrefs = (UserPref) session.getAttribute("prefs");
 
         String schema = null;
         WebResult describeStructure, tableData, queryResultsDescribe, tableDetails, tableIndexes;
@@ -62,8 +63,8 @@ public class TableViewerController
         String selectedSchema = request.getParameter("selectedSchema");
         String tabName = (String)request.getParameter("tabName");
 
-        logger.info("selectedSchema = " + selectedSchema);
-        logger.info("tabName = " + tabName);
+        log.info("selectedSchema = " + selectedSchema);
+        log.info("tabName = " + tabName);
 
         if (selectedSchema != null)
         {
@@ -84,9 +85,10 @@ public class TableViewerController
 
         // get table rows
         tableData = genericDAO.runGenericQuery
-                (String.format(tableRows, schema, tabName), null, (String)session.getAttribute("user_key"), -1);
+                (String.format(tableRows, schema, tabName, userPrefs.getSampleDataSize()), null, (String)session.getAttribute("user_key"), -1);
 
         model.addAttribute("queryResults", tableData);
+        model.addAttribute("queryResultsSize", tableData.getRows().size());
 
         // describe table
         queryResultsDescribe = genericDAO.runGenericQuery

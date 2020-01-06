@@ -18,19 +18,19 @@ limitations under the License.
 package com.pivotal.pcf.mysqlweb.controller;
 
 import com.pivotal.pcf.mysqlweb.beans.Login;
+import com.pivotal.pcf.mysqlweb.beans.MySQLInstance;
 import com.pivotal.pcf.mysqlweb.beans.UserPref;
 import com.pivotal.pcf.mysqlweb.beans.WebResult;
 import com.pivotal.pcf.mysqlweb.dao.PivotalMySQLWebDAOFactory;
 import com.pivotal.pcf.mysqlweb.dao.generic.Constants;
 import com.pivotal.pcf.mysqlweb.dao.generic.GenericDAO;
 import com.pivotal.pcf.mysqlweb.utils.*;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.json.JsonParser;
 import org.springframework.boot.json.JsonParserFactory;
 import org.springframework.jdbc.datasource.SingleConnectionDataSource;
 import org.springframework.stereotype.Controller;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -38,14 +38,15 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 
 import javax.servlet.http.HttpSession;
+import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Controller
 public class LoginController
 {
-    protected static Logger logger = LoggerFactory.getLogger(LoginController.class);
 
     @Autowired
     UserPref userPref;
@@ -53,7 +54,7 @@ public class LoginController
     @GetMapping(value = "/")
     public String login(Model model, HttpSession session) throws Exception
     {
-        logger.info("Received request to show login page");
+        log.info("Received request to show login page");
         WebResult databaseList;
 
         String jsonString = null;
@@ -67,12 +68,12 @@ public class LoginController
                 {
                     ConnectionManager cm = ConnectionManager.getInstance();
 
-                    logger.info("** Attempting login using VCAP_SERVICES **");
-                    logger.info(jsonString);
+                    log.info("** Attempting login using VCAP_SERVICES **");
+                    log.info(jsonString);
 
                     Login login = Utils.parseLoginCredentials(jsonString);
 
-                    logger.info("Login : " + login);
+                    log.info("Login : " + login);
 
                     MysqlConnection newConn =
                             new MysqlConnection
@@ -100,14 +101,17 @@ public class LoginController
                     Map<String, Long> schemaMap;
                     schemaMap = genericDAO.populateSchemaMap(login.getSchema(), session.getId());
 
-                    logger.info("schemaMap=" + schemaMap);
+                    log.info("schemaMap=" + schemaMap);
                     session.setAttribute("schemaMap", schemaMap);
 
-                    logger.info(userPref.toString());
+                    log.info(userPref.toString());
 
                     String autobound = mysqlInstanceType(jsonString);
 
-                    session.setAttribute("autobound", autobound);
+                    List<MySQLInstance> services = Utils.getAllServices(jsonString);
+                    session.setAttribute("autobound", login.getSchema());
+                    session.setAttribute("servicesListSize", services.size());
+                    session.setAttribute("servicesList", services);
                     model.addAttribute("databaseList", databaseList);
 
                     return "main";
@@ -117,7 +121,7 @@ public class LoginController
                 {
                     // we tried if we can't auto login , just present login screen
                     model.addAttribute("loginObj", new Login("", "", "jdbc:mysql://localhost:3306/apples", "apples"));
-                    logger.info("Auto Login via VCAP_SERVICES Failed - " + ex.getMessage());
+                    log.info("Auto Login via VCAP_SERVICES Failed - " + ex.getMessage());
                 }
 
             }
@@ -140,16 +144,17 @@ public class LoginController
              Model model,
              HttpSession session) throws Exception
     {
+        log.info("Received request to login");
+
         WebResult databaseList, schemaMapResult;
         SingleConnectionDataSource ds = new SingleConnectionDataSource();
 
-        logger.info("Received request to login");
         ConnectionManager cm = ConnectionManager.getInstance();
 
         Login loginObj = new Login(username, password, url, "");
 
-        logger.info("url {" + loginObj.getUrl() + "}");
-        logger.info("user {" + loginObj.getUsername() + "}");
+        log.info("url {" + loginObj.getUrl() + "}");
+        log.info("user {" + loginObj.getUsername() + "}");
 
         try
         {
@@ -157,8 +162,8 @@ public class LoginController
             MysqlConnection newConn =
                     new MysqlConnection
                             (url,
-                             new java.util.Date().toString(),
-                             username.toUpperCase());
+                                    new java.util.Date().toString(),
+                                    username.toUpperCase());
 
             cm.addConnection(newConn, session.getId());
             cm.addDataSourceConnection(AdminUtil.newSingleConnectionDataSource
@@ -184,8 +189,12 @@ public class LoginController
             Map<String, Long> schemaMap;
             schemaMap = genericDAO.populateSchemaMap(schema, session.getId());
 
-            logger.info("schemaMap=" + schemaMap);
+            log.info("schemaMap=" + schemaMap);
             session.setAttribute("schemaMap", schemaMap);
+            List<MySQLInstance> services = new ArrayList<MySQLInstance>();
+
+            session.setAttribute("servicesListSize", services.size());
+            session.setAttribute("servicesList", services);
 
             model.addAttribute("databaseList", databaseList);
 
@@ -210,11 +219,18 @@ public class LoginController
 
         Map<String, Object> jsonMap = parser.parseMap(jsonString);
 
-        List mysqlService = (List) jsonMap.get("cleardb");
+        List mysqlService = null;
+        mysqlService = (List) jsonMap.get("cleardb");
 
         if (mysqlService == null)
         {
-            mysqlType = "P-MYSQL";
+            mysqlService = (List) jsonMap.get("p.mysql");
+            if (mysqlService != null) {
+                mysqlType = "P.MYSQL";
+            }
+
+
+
         }
         else
         {

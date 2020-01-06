@@ -26,8 +26,7 @@ import com.pivotal.pcf.mysqlweb.main.PivotalMySQLWebException;
 import com.pivotal.pcf.mysqlweb.utils.ConnectionManager;
 import com.pivotal.pcf.mysqlweb.utils.QueryUtil;
 import com.pivotal.pcf.mysqlweb.utils.Utils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Controller;
 import org.springframework.ui.Model;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -46,10 +45,10 @@ import java.text.DecimalFormat;
 import java.util.*;
 import java.util.regex.Pattern;
 
+@Slf4j
 @Controller
 public class QueryController
 {
-    protected static Logger logger = LoggerFactory.getLogger(QueryController.class);
     private static final String FILENAME_EXPORT = "query-output.csv";
     private static final String FILENAME_EXPORT_JSON = "query-output.json";
     private static final String SAVE_CONTENT_TYPE = "application/x-download";
@@ -65,11 +64,11 @@ public class QueryController
     {
         if (Utils.verifyConnection(response, session))
         {
-            logger.info("user_key is null OR Connection stale so new Login required");
+            log.info("user_key is null OR Connection stale so new Login required");
             return null;
         }
 
-        logger.info("Received request to show query worksheet");
+        log.info("Received request to show query worksheet");
         UserPref userPrefs = (UserPref) session.getAttribute("prefs");
         GenericDAO genericDAO = PivotalMySQLWebDAOFactory.getGenericDAO();
 
@@ -82,21 +81,21 @@ public class QueryController
 
             if (action.trim().equals("commit"))
             {
-                logger.info("commit action requested");
+                log.info("commit action requested");
                 result = genericDAO.runStatement("commit", "N", "Y", (String)session.getAttribute("user_key"));
                 addCommandToHistory(session, userPrefs, "commit");
                 model.addAttribute("result", result);
             }
             else if (action.trim().equals("rollback"))
             {
-                logger.info("rollback action requested");
+                log.info("rollback action requested");
                 result = genericDAO.runStatement("rollback", "N", "Y", (String)session.getAttribute("user_key"));
                 addCommandToHistory(session, userPrefs, "rollback");
                 model.addAttribute("result", result);
             }
             else if (action.trim().equals("export"))
             {
-                logger.info("export data to CSV action requested");
+                log.info("export data to CSV action requested");
                 String query = request.getParameter("query");
                 String exportDataCSV = QueryUtil.runQueryForCSV(conn, query);
 
@@ -110,7 +109,7 @@ public class QueryController
             }
             else if (action.trim().equals("export_json"))
             {
-                logger.info("export data to JSON action requested");
+                log.info("export data to JSON action requested");
                 String query = request.getParameter("query");
                 String exportDataJSON = QueryUtil.runQueryForJSON(conn, query);
 
@@ -146,19 +145,20 @@ public class QueryController
     {
         if (Utils.verifyConnection(response, session))
         {
-            logger.info("user_key is null OR Connection stale so new Login required");
+            log.info("user_key is null OR Connection stale so new Login required");
             return null;
         }
 
-        logger.info("Received request to action SQL from query worksheet");
+        log.info("Received request to action SQL from query worksheet");
         ConnectionManager cm = ConnectionManager.getInstance();
         Connection conn = cm.getDataSource(session.getId()).getConnection();
         GenericDAO genericDAO = PivotalMySQLWebDAOFactory.getGenericDAO();
 
         UserPref userPrefs = (UserPref) session.getAttribute("prefs");
 
-        logger.info("Query = [" + query + "]");
+        log.info("Query = [" + query + "]");
         String [] splitQueryStr = spiltQuery(query);
+        log.info("Split Query Length = [" + splitQueryStr.length + "]");
 
         CommandResult result = new CommandResult();
         WebResult webResult;
@@ -174,7 +174,7 @@ public class QueryController
                     try {
                         if (explainPlan.equals("Y"))
                         {
-                            logger.info("Need to run explain plan");
+                            log.info("Need to run explain plan");
 
                             webResult = genericDAO.runGenericQuery
                                     ("explain " + s, null, (String)session.getAttribute("user_key"), -1);
@@ -211,7 +211,7 @@ public class QueryController
                         result.setRows(-1);
                         model.addAttribute("result", result);
                         model.addAttribute("query", s);
-                        logger.info("Error Result = " + result);
+                        log.info("Error Result = " + result);
                     }
                 }
                 else
@@ -260,14 +260,14 @@ public class QueryController
                                 result.setRows(-1);
                                 model.addAttribute("result", result);
                                 model.addAttribute("query", s);
-                                //logger.info("Error Result = " + result);
                             }
 
                         }
                         else
                         {
+
                             result = genericDAO.runStatement
-                                    (s, elapsedTime, "N", (String)session.getAttribute("user_key"));
+                                    (s, elapsedTime, "N", (String) session.getAttribute("user_key"));
 
                             model.addAttribute("result", result);
                             if (result.getMessage().startsWith("SUCCESS")) {
@@ -286,17 +286,35 @@ public class QueryController
             else
             {
                 model.addAttribute("query", query);
-                logger.info("multiple SQL statements need to be executed");
-                SortedMap<String, Object> queryResults =
-                        handleMultipleStatements(splitQueryStr,
-                                userPrefs,
-                                queryCount,
-                                elapsedTime,
-                                explainPlan,
-                                session);
-                logger.info("keys : " + queryResults.keySet());
-                model.addAttribute("sqlResultMap", queryResults);
-                model.addAttribute("statementsExecuted", queryResults.size());
+
+                if (query.toUpperCase().startsWith("CREATE PROCEDURE") || query.toUpperCase().startsWith("CREATE FUNCTION")) {
+                    log.info("Executing create procedure or function now as single query only");
+
+                    result = genericDAO.runStatement
+                            (query, elapsedTime, "N", (String) session.getAttribute("user_key"));
+
+                    model.addAttribute("result", result);
+                    if (result.getMessage().startsWith("SUCCESS")) {
+                        addCommandToHistory(session, userPrefs, query);
+                        session.setAttribute("schemaMap",
+                                genericDAO.populateSchemaMap
+                                        ((String)session.getAttribute("schema"),
+                                                (String)session.getAttribute("user_key")));
+                    }
+                }
+                else {
+                    log.info("Multiple SQL statements need to be executed");
+                    SortedMap<String, Object> queryResults =
+                            handleMultipleStatements(splitQueryStr,
+                                    userPrefs,
+                                    queryCount,
+                                    elapsedTime,
+                                    explainPlan,
+                                    session);
+                    log.info("keys : " + queryResults.keySet());
+                    model.addAttribute("sqlResultMap", queryResults);
+                    model.addAttribute("statementsExecuted", queryResults.size());
+                }
             }
         }
 
@@ -321,7 +339,7 @@ public class QueryController
                 String data = new String(bytes);
 
                 model.addAttribute("query", data);
-                logger.info("Loaded SQL file with " + data.length() + " bytes");
+                log.info("Loaded SQL file with " + data.length() + " bytes");
         }
 
         model.addAttribute("queryCount", "N");
@@ -340,17 +358,17 @@ public class QueryController
     {
         if (Utils.verifyConnection(response, session))
         {
-            logger.info("user_key is null OR Connection stale so new Login required");
+            log.info("user_key is null OR Connection stale so new Login required");
             return null;
         }
 
-        logger.info("Received request to action a query directly");
+        log.info("Received request to action a query directly");
         GenericDAO genericDAO = PivotalMySQLWebDAOFactory.getGenericDAO();
 
         UserPref userPrefs = (UserPref) session.getAttribute("prefs");
 
         String query = request.getParameter("query");
-        logger.info("Query = " + query);
+        log.info("Query = " + query);
 
         CommandResult result = new CommandResult();
         String s = query.trim();
@@ -361,7 +379,7 @@ public class QueryController
             WebResult webResult = genericDAO.runGenericQuery
                     (query, null, (String)session.getAttribute("user_key"), userPrefs.getMaxRecordsinSQLQueryWindow());
 
-            logger.info("Query run");
+            log.info("Query run");
             model.addAttribute("queryResults", webResult);
             model.addAttribute("querysql", query);
             addCommandToHistory(session, userPrefs, query);
@@ -387,7 +405,7 @@ public class QueryController
         Pattern pattern = Pattern.compile(";\\s", Pattern.MULTILINE);
         String [] splitQueryStr = pattern.split(query);
 
-        logger.info("split query = {" + Arrays.toString(splitQueryStr) + "}");
+        log.info("split query = {" + Arrays.toString(splitQueryStr) + "}");
         return splitQueryStr;
     }
 
